@@ -35,7 +35,7 @@ pip install numpy matplotlib
 
 ### 4. **Running Project**
 ```bash
-mvn javafx:run
+python real_time/app.py
 ```
 ## Methodology  
 
@@ -84,19 +84,15 @@ Smooth data fluctuations and filter out noise for improved accuracy.
 - **Normalization** ensures scalability across different body types by using torso length as a reference for consistent comparisons.  
 - **Linear Interpolation** fills missing keypoints, maintaining data integrity even with incomplete frame data.  
 - **Moving Average** smooths detected keypoints to reduce noise and highlight significant trends.  
+
+### Roadmap/Ideas:
+- add gesture detection
+- track specific joins over time
+- apply ML classification to movement patterns
  
 ## Contributors
 
-- Aron Mundanilkunathil
-- Huu Tinh Nguyen
-- Jay Barrios Abarquez
-- Kundyz Serzhankyzy
-- Uyen Pham
-- Ryan Nguyen
-- Ania Niedzialek
-- Mohammed Nassar
-- Sunny Doan
 - Nguyen Pham
-  
+- Ania Niedzialek
 
 
