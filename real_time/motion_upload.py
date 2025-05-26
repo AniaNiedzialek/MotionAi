@@ -136,6 +136,62 @@ class MotionUploadDialog(ctk.CTkToplevel):
         )
         self.file_status_label.pack(pady=10)
         
+        # Add a quality settings frame
+        self.quality_frame = ctk.CTkFrame(self.file_tab)
+        self.quality_frame.pack(fill="x", padx=10, pady=5)
+        
+        # Target FPS setting
+        fps_label = ctk.CTkLabel(self.quality_frame, text="Target FPS:")
+        fps_label.pack(side="left", padx=5)
+        
+        self.target_fps_var = ctk.IntVar(value=15)
+        self.target_fps_slider = ctk.CTkSlider(
+            self.quality_frame,
+            from_=5,
+            to=30,
+            number_of_steps=25,
+            variable=self.target_fps_var,
+            width=150
+        )
+        self.target_fps_slider.pack(side="left", padx=5)
+        
+        self.fps_value_label = ctk.CTkLabel(self.quality_frame, text="15")
+        self.fps_value_label.pack(side="left", padx=5)
+        
+        self.target_fps_slider.configure(command=self._update_fps_label)
+        
+        # Minimum confidence threshold
+        conf_frame = ctk.CTkFrame(self.file_tab)
+        conf_frame.pack(fill="x", padx=10, pady=5)
+        
+        conf_label = ctk.CTkLabel(conf_frame, text="Min. Pose Confidence:")
+        conf_label.pack(side="left", padx=5)
+        
+        self.min_confidence_var = ctk.DoubleVar(value=0.6)
+        self.confidence_slider = ctk.CTkSlider(
+            conf_frame,
+            from_=0.3,
+            to=0.9,
+            number_of_steps=12,
+            variable=self.min_confidence_var,
+            width=150
+        )
+        self.confidence_slider.pack(side="left", padx=5)
+        
+        self.conf_value_label = ctk.CTkLabel(conf_frame, text="0.6")
+        self.conf_value_label.pack(side="left", padx=5)
+        
+        self.confidence_slider.configure(command=self._update_conf_label)
+        
+        # Interpolation option
+        self.interpolate_var = ctk.BooleanVar(value=True)
+        self.interpolate_check = ctk.CTkCheckBox(
+            self.file_tab,
+            text="Interpolate missing poses",
+            variable=self.interpolate_var
+        )
+        self.interpolate_check.pack(pady=5)
+        
     def setup_details_frame(self):
         # Motion name
         name_frame = ctk.CTkFrame(self.details_frame)
@@ -252,29 +308,29 @@ class MotionUploadDialog(ctk.CTkToplevel):
                     for idx, landmark in enumerate(results.pose_landmarks.landmark):
                         landmark_name = mp_pose.PoseLandmark(idx).name
                         keypoints[landmark_name] = [landmark.x, landmark.y, landmark.z, landmark.visibility]
-                    
-                    # Store frame data
-                    self.recorded_frames.append({
-                        "frame_index": self.frame_count,
-                        "keypoints": keypoints
-                    })
-                    self.frame_count += 1
-                    
-                    # Update UI
-                    self.update_frame_count()
                 
-                # Draw landmarks
-                if results.pose_landmarks:
-                    mp.solutions.drawing_utils.draw_landmarks(
-                        frame, results.pose_landmarks, mp_pose.POSE_CONNECTIONS
-                    )
+                # Store only frame_index and keypoints
+                self.recorded_frames.append({
+                    "frame_index": self.frame_count,
+                    "keypoints": keypoints
+                })
+                self.frame_count += 1
                 
-                # Update preview
-                self.update_preview(frame)
-                
-                # Frame rate control
-                time.sleep(1/30)
-                
+                # Update UI
+                self.update_frame_count()
+            
+            # Draw landmarks
+            if results.pose_landmarks:
+                mp.solutions.drawing_utils.draw_landmarks(
+                    frame, results.pose_landmarks, mp_pose.POSE_CONNECTIONS
+                )
+            
+            # Update preview
+            self.update_preview(frame)
+            
+            # Frame rate control
+            time.sleep(1/30)
+            
         finally:
             cap.release()
             pose.close()
@@ -325,11 +381,19 @@ class MotionUploadDialog(ctk.CTkToplevel):
         ).start()
     
     def _process_video_thread(self):
-        """Thread function to process a video file"""
+        """Thread function to process a video file with adaptive sampling"""
         try:
+            # Get settings from UI
+            target_fps = self.target_fps_var.get()
+            min_confidence = self.min_confidence_var.get()
+            use_interpolation = self.interpolate_var.get()
+            
             # MediaPipe setup
             mp_pose = mp.solutions.pose
-            pose = mp_pose.Pose(min_detection_confidence=0.6, min_tracking_confidence=0.6)
+            pose = mp_pose.Pose(
+                min_detection_confidence=min_confidence, 
+                min_tracking_confidence=min_confidence
+            )
             
             # Open video
             cap = cv2.VideoCapture(self.selected_file)
@@ -339,52 +403,99 @@ class MotionUploadDialog(ctk.CTkToplevel):
                 ))
                 return
                 
+            # Get video properties
+            video_fps = cap.get(cv2.CAP_PROP_FPS)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            
+            # Calculate sample rate based on source and target FPS
+            sample_rate = max(1, round(video_fps / target_fps))
+            
+            # Update UI with expected frame count
+            expected_frames = total_frames // sample_rate
+            self.after(0, lambda: self.file_status_label.configure(
+                text=f"Processing video ({expected_frames} frames expected)...", 
+                text_color="orange"
+            ))
+            
             # Reset frames
             self.recorded_frames = []
             self.frame_count = 0
             
-            # Process every other frame
+            # Keep track of last successful detection
+            last_keypoints = None
+            frames_since_detection = 0
+            
+            # Process frames with adaptive sampling
             frame_index = 0
             while True:
                 ret, frame = cap.read()
                 if not ret:
                     break
                 
-                # Process every other frame to reduce quantity
-                if frame_index % 2 == 0:
+                # Process frames according to calculated sample rate
+                if frame_index % sample_rate == 0:
                     # Process frame
                     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     results = pose.process(frame_rgb)
                     
                     # Extract keypoints
                     if results.pose_landmarks:
+                        # Good detection - extract keypoints
                         keypoints = {}
                         for idx, landmark in enumerate(results.pose_landmarks.landmark):
                             landmark_name = mp_pose.PoseLandmark(idx).name
-                            keypoints[landmark_name] = [landmark.x, landmark.y, landmark.z, landmark.visibility]
+                            keypoints[landmark_name] = [
+                                landmark.x, landmark.y, landmark.z, landmark.visibility
+                            ]
                         
-                        # Store frame data
+                        # Store only frame_index and keypoints
                         self.recorded_frames.append({
                             "frame_index": self.frame_count,
                             "keypoints": keypoints
                         })
+                        
+                        # Update tracking variables
+                        last_keypoints = keypoints
+                        frames_since_detection = 0
                         self.frame_count += 1
-                
+                        
+                    elif last_keypoints is not None and use_interpolation:
+                        # No detection but we have previous keypoints - use them with penalty
+                        frames_since_detection += 1
+                        
+                        # Only interpolate if we're not missing too many frames (max 3)
+                        if frames_since_detection <= 3:
+                            # Use last keypoints
+                            self.recorded_frames.append({
+                                "frame_index": self.frame_count,
+                                "keypoints": last_keypoints.copy()
+                            })
+                            self.frame_count += 1
+            
                 frame_index += 1
                 
                 # Update UI periodically
                 if frame_index % 30 == 0:
-                    self.after(0, lambda count=self.frame_count: self.file_status_label.configure(
-                        text=f"Processed {count} frames...", text_color="orange"
+                    progress = min(100, int((frame_index / total_frames) * 100))
+                    self.after(0, lambda p=progress, c=self.frame_count: self.file_status_label.configure(
+                        text=f"Processing: {p}% ({c} frames captured)...", text_color="orange"
                     ))
-            
+    
+            # Process interpolation between keyframes if enabled
+            if use_interpolation and len(self.recorded_frames) >= 2:
+                self.after(0, lambda: self.file_status_label.configure(
+                    text="Performing pose interpolation...", text_color="orange"
+                ))
+                self._interpolate_between_keyframes()
+        
             cap.release()
             pose.close()
             
             # Enable save button if frames were extracted
             if self.frame_count > 0:
                 self.after(0, lambda: self.file_status_label.configure(
-                    text=f"Extracted {self.frame_count} frames", text_color="green"
+                    text=f"Extracted {self.frame_count} frames", 
+                    text_color="green"
                 ))
                 self.after(0, lambda: self.save_button.configure(state="normal"))
                 
@@ -398,11 +509,98 @@ class MotionUploadDialog(ctk.CTkToplevel):
                 self.after(0, lambda: self.file_status_label.configure(
                     text="No pose data detected in video!", text_color="red"
                 ))
-                
+            
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             self.after(0, lambda: self.file_status_label.configure(
                 text=f"Error: {str(e)}", text_color="red"
             ))
+    
+    def _interpolate_between_keyframes(self):
+        """Interpolate poses between keyframes with good detections"""
+        # First, find all non-interpolated keyframes for reference
+        keyframes = []
+        frame_to_idx = {}
+        
+        # Build a map of frame indices to their position in the array
+        for i, frame in enumerate(self.recorded_frames):
+            frame_to_idx[frame["frame_index"]] = i
+            keyframes.append(frame)
+        
+        if len(keyframes) < 2:
+            return  # Need at least 2 keyframes for interpolation
+        
+        # Helper function to interpolate between two values
+        def interp(val1, val2, fraction):
+            return val1 + (val2 - val1) * fraction
+        
+        # Resulting frames after interpolation
+        new_frames = []
+        
+        # Process each pair of consecutive keyframes
+        for i in range(len(keyframes) - 1):
+            start_frame = keyframes[i]
+            end_frame = keyframes[i + 1]
+            
+            # Get frame indices
+            start_idx = start_frame["frame_index"]
+            end_idx = end_frame["frame_index"]
+            
+            # Skip if frames are consecutive
+            if end_idx - start_idx <= 1:
+                new_frames.append(start_frame)
+                continue
+            
+            # Add start frame
+            new_frames.append(start_frame)
+            
+            # Calculate number of frames to insert
+            num_insertions = end_idx - start_idx - 1
+            
+            # Only interpolate if frames aren't too far apart (gap < 10)
+            if num_insertions > 0 and num_insertions < 10:
+                # Get keypoints from both frames
+                start_kpts = start_frame["keypoints"]
+                end_kpts = end_frame["keypoints"]
+                
+                # Make sure both keyframes have same landmarks
+                common_landmarks = set(start_kpts.keys()).intersection(end_kpts.keys())
+                
+                # Create interpolated frames
+                for j in range(1, num_insertions + 1):
+                    # Calculate interpolation fraction
+                    fraction = j / (num_insertions + 1)
+                    
+                    # Interpolate keypoints
+                    interp_keypoints = {}
+                    for landmark in common_landmarks:
+                        start_vals = start_kpts[landmark]
+                        end_vals = end_kpts[landmark]
+                        
+                        # Interpolate x, y, z, visibility
+                        interp_keypoints[landmark] = [
+                            interp(start_vals[0], end_vals[0], fraction),  # x
+                            interp(start_vals[1], end_vals[1], fraction),  # y
+                            interp(start_vals[2], end_vals[2], fraction),  # z
+                            interp(start_vals[3], end_vals[3], fraction)   # visibility
+                        ]
+                    
+                    # Create simplified interpolated frame
+                    interp_frame = {
+                        "frame_index": start_idx + j,
+                        "keypoints": interp_keypoints
+                    }
+                    
+                    new_frames.append(interp_frame)
+    
+        # Add the last keyframe
+        if keyframes:
+            new_frames.append(keyframes[-1])
+        
+        # Update frames with interpolated ones and sort by frame index
+        self.recorded_frames = sorted(new_frames, key=lambda x: x["frame_index"])
+        self.frame_count = len(self.recorded_frames)
     
     def save_motion(self):
         """Save the recorded motion to database"""
@@ -467,3 +665,11 @@ class MotionUploadDialog(ctk.CTkToplevel):
             self.recording_thread.join(timeout=1.0)
             
         self.destroy()
+    
+    def _update_fps_label(self, value):
+        """Update the FPS label when slider changes"""
+        self.fps_value_label.configure(text=f"{int(value)}")
+
+    def _update_conf_label(self, value):
+        """Update the confidence label when slider changes"""
+        self.conf_value_label.configure(text=f"{value:.1f}")
