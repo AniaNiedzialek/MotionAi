@@ -381,7 +381,7 @@ class MotionUploadDialog(ctk.CTkToplevel):
         ).start()
     
     def _process_video_thread(self):
-        """Thread function to process a video file with adaptive sampling"""
+        """Process a video file extracting pose keypoints with adaptive sampling"""
         try:
             # Get settings from UI
             target_fps = self.target_fps_var.get()
@@ -421,26 +421,21 @@ class MotionUploadDialog(ctk.CTkToplevel):
             self.recorded_frames = []
             self.frame_count = 0
             
-            # Keep track of last successful detection
+            # Tracking variables for handling missing detections
             last_keypoints = None
             frames_since_detection = 0
             
-            # Process frames with adaptive sampling
             frame_index = 0
             while True:
                 ret, frame = cap.read()
                 if not ret:
                     break
                 
-                # Process frames according to calculated sample rate
                 if frame_index % sample_rate == 0:
-                    # Process frame
                     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     results = pose.process(frame_rgb)
                     
-                    # Extract keypoints
                     if results.pose_landmarks:
-                        # Good detection - extract keypoints
                         keypoints = {}
                         for idx, landmark in enumerate(results.pose_landmarks.landmark):
                             landmark_name = mp_pose.PoseLandmark(idx).name
@@ -448,24 +443,20 @@ class MotionUploadDialog(ctk.CTkToplevel):
                                 landmark.x, landmark.y, landmark.z, landmark.visibility
                             ]
                         
-                        # Store only frame_index and keypoints
                         self.recorded_frames.append({
                             "frame_index": self.frame_count,
                             "keypoints": keypoints
                         })
                         
-                        # Update tracking variables
                         last_keypoints = keypoints
                         frames_since_detection = 0
                         self.frame_count += 1
                         
                     elif last_keypoints is not None and use_interpolation:
-                        # No detection but we have previous keypoints - use them with penalty
+                        # Use previous keypoints for short gaps in detection
                         frames_since_detection += 1
                         
-                        # Only interpolate if we're not missing too many frames (max 3)
                         if frames_since_detection <= 3:
-                            # Use last keypoints
                             self.recorded_frames.append({
                                 "frame_index": self.frame_count,
                                 "keypoints": last_keypoints.copy()
@@ -481,13 +472,13 @@ class MotionUploadDialog(ctk.CTkToplevel):
                         text=f"Processing: {p}% ({c} frames captured)...", text_color="orange"
                     ))
     
-            # Process interpolation between keyframes if enabled
+            # Fill gaps in the sequence by interpolating between keyframes
             if use_interpolation and len(self.recorded_frames) >= 2:
                 self.after(0, lambda: self.file_status_label.configure(
                     text="Performing pose interpolation...", text_color="orange"
                 ))
                 self._interpolate_between_keyframes()
-        
+            
             cap.release()
             pose.close()
             
@@ -509,7 +500,7 @@ class MotionUploadDialog(ctk.CTkToplevel):
                 self.after(0, lambda: self.file_status_label.configure(
                     text="No pose data detected in video!", text_color="red"
                 ))
-            
+                
         except Exception as e:
             import traceback
             traceback.print_exc()
