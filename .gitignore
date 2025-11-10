@@ -1,1 +1,31 @@
+# Python venvs
+.venv/
+.venv311/
+venv/
+ENV/
+env/
+
+# Python build/bytecode
 __pycache__/
+*.py[cod]
+*.pyo
+
+# macOS
+.DS_Store
+
+# Java/Maven/Gradle outputs
+target/
+build/
+out/
+
+# VS Code
+.vscode/
+
+# Databases & logs
+*.db
+*.sqlite*
+*.log
+
+# Caches
+*.cache/
+.cache/

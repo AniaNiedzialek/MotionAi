@@ -178,136 +178,207 @@ class MotionApp(ctk.CTk):
             self.processing_thread = None
             self.status_label.configure(text="Status: Idle.")
             
+    
     def process_frames_loop(self):
-        """Main processing loop running in a separate thread"""
+        """Main processing loop running in a separate thread."""
+        PROCESS_EVERY = 3            # run mediapipe every N frames for perf
+        MISS_TOLERANCE = 10          # frames allowed without a new detection (~1/3 sec)
         print("DEBUG: process_frames thread started")
-        
+
         try:
             if not self.camera_manager.start():
-                self.last_feedback = "Error: Camera unavailable"
+                reason = self.camera_manager.last_error or "Camera unavailable"
+                print(f"DEBUG: camera start failed -> {reason}")
+                self.last_feedback = f"Error: {reason}"
                 self.is_running = False
-                self.after(100, self.update_ui_elements)
+                self.after(50, self.update_ui_elements)
                 return
-                
+
+            print(f"DEBUG: camera opened on index {self.camera_manager.camera_index}")
+            self.after(0, self.update_ui_elements)  # ensure UI loop is alive
+
+            ticks = 0
+            consecutive_fail = 0
+
+            # ---- NEW: cache the last successful user pose/results ----
+            last_user_kpts = None
+            last_results = None
+            miss_count = 0
+
             while self.is_running:
-                # Read frame from camera
-                success, frame = self.camera_manager.read_frame()
-                if not success:
-                    print("DEBUG: cap.read() returned success=False")
-                    self.last_feedback = "Error reading frame"
+                ok, frame = self.camera_manager.read_frame()
+                if not ok or frame is None:
+                    consecutive_fail += 1
+                    if consecutive_fail % 10 == 0:
+                        print(f"DEBUG: read_frame failed x{consecutive_fail}")
+                    if consecutive_fail >= 60:  # ~2 sec at 30 fps
+                        print("DEBUG: too many read failures, stopping loop")
+                        break
                     continue
-                    
-                # Process user pose
-                user_keypoints, results = self.pose_processor.extract_keypoints(frame)
-                if results.pose_landmarks:
-                    self.pose_processor.draw_pose(frame, results)
-                else:
+                consecutive_fail = 0
+
+                # -------- Pose extraction (throttled) --------
+                fresh_detection = False
+                try:
+                    if ticks % PROCESS_EVERY == 0:
+                        user_keypoints, results = self.pose_processor.extract_keypoints(frame)
+                        if user_keypoints:
+                            last_user_kpts = user_keypoints
+                            last_results = results
+                            miss_count = 0
+                            fresh_detection = True
+                        else:
+                            miss_count += 1
+                    else:
+                        # reuse last pose on skipped frames
+                        user_keypoints, results = last_user_kpts, last_results
+                        if user_keypoints is None:
+                            miss_count += 1
+                except Exception as e:
+                    print(f"DEBUG: extract_keypoints error: {e}")
+                    import traceback; traceback.print_exc()
+                    user_keypoints, results = last_user_kpts, last_results
+                    miss_count += 1
+
+                # -------- Draw user pose (reuse cached results if needed) --------
+                if results is not None and getattr(results, "pose_landmarks", None):
+                    try:
+                        self.pose_processor.draw_pose(frame, results)
+                    except Exception:
+                        pass
+
+                # Only show the “no pose” message after short streak of misses
+                if miss_count > MISS_TOLERANCE:
                     self.last_feedback = "No user pose detected"
-                    
-                # Get professional pose keypoints
-                pro_keypoints = self.motion_player.get_current_frame_keypoints()
-                
-                # Compare poses
+
+                # -------- Pro frame --------
+                try:
+                    pro_keypoints = self.motion_player.get_current_frame_keypoints()
+                except Exception as e:
+                    print(f"DEBUG: get_current_frame_keypoints error: {e}")
+                    pro_keypoints = None
+
+                # -------- Compare (only if we currently have user_keypoints) --------
                 if pro_keypoints and user_keypoints:
-                    score, feedback, deviations = self.motion_comparer.calculate_similarity(
-                        user_keypoints, pro_keypoints
-                    )
+                    try:
+                        score, feedback, deviations = self.motion_comparer.calculate_similarity(
+                            user_keypoints, pro_keypoints
+                        )
+                    except Exception as e:
+                        print(f"DEBUG: similarity error: {e}")
+                        score, feedback, deviations = 0.0, "Comparison error", set()
+
                     self.last_score = score
-                    self.last_feedback = feedback
+                    # If we just got a fresh detection, update feedback immediately;
+                    # otherwise keep previous feedback to avoid flicker.
+                    if fresh_detection or not self.last_feedback or self.last_feedback.startswith("No user"):
+                        self.last_feedback = feedback
                     self.last_deviations = deviations
-                    
-                    # Check if we should advance to next pose
-                    self.motion_player.check_advance_frame(score)
+
+                    try:
+                        self.motion_player.check_advance_frame(score)
+                    except Exception as e:
+                        print(f"DEBUG: check_advance_frame error: {e}")
                 elif not pro_keypoints:
-                    self.last_feedback = f"Pro frame data missing?"
+                    # don't spam this every frame; only when nothing to compare
+                    if fresh_detection:
+                        self.last_feedback = "Pro frame data missing?"
                     self.last_score = 0.0
                     self.last_deviations = set()
-                else:
-                    self.last_score = 0.0
-                    self.last_deviations = set()
-                    
-                # Draw professional pose landmarks with highlighting
-                self.pose_processor.draw_professional_pose(
-                    frame, 
-                    pro_keypoints, 
-                    self.last_deviations,
-                    FRAME_WIDTH, 
-                    FRAME_HEIGHT
-                )
-                
-                # Update frame for UI display
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                self.last_frame = Image.fromarray(frame_rgb)
-                    
+
+                # -------- Pro overlay (green) --------
+                try:
+                    self.pose_processor.draw_professional_pose(
+                        frame, pro_keypoints, self.last_deviations, FRAME_WIDTH, FRAME_HEIGHT
+                    )
+                except Exception as e:
+                    if ticks % 30 == 0:
+                        print(f"DEBUG: draw_professional_pose error: {e}")
+
+                # -------- UI frame --------
+                try:
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    self.last_frame = Image.fromarray(frame_rgb)
+                except Exception as e:
+                    if ticks % 30 == 0:
+                        print(f"DEBUG: BGR2RGB error: {e}")
+                    self.last_frame = None
+
+                ticks += 1
+
+            print("DEBUG: loop exit; is_running =", self.is_running)
+
         except Exception as e:
             print(f"!!! ERROR in processing thread: {e}")
-            import traceback
-            traceback.print_exc()
+            import traceback; traceback.print_exc()
             self.last_feedback = f"Error: {e}"
             self.last_frame = None
             self.last_deviations = set()
             self.is_running = False
-            
+
         finally:
-            # Clean up
             self.camera_manager.stop()
             print("DEBUG: process_frames thread finished cleanup")
-            
-            # Reset UI elements
             self.last_frame = None
             self.last_score = 0.0
-            if not self.last_feedback.startswith("Error:"):
+            if not str(self.last_feedback).startswith("Error:"):
                 self.last_feedback = "Session stopped."
-            self.last_deviations = set()
-            
-            # Schedule final UI update
             self.after(10, self.update_ui_elements)
-            
+    
     def update_ui_elements(self):
-        """Update UI with current application state"""
-        # Update video feed
-        if self.last_frame is not None:
+        """Update UI with current application state (thread-safe & image-safe)."""
+        from tkinter import TclError
+        try:
+            # ----- Video feed -----
+            if self.last_frame is not None:
+                try:
+                    img = self.last_frame.resize((FRAME_WIDTH, FRAME_HEIGHT))
+                    # Use PhotoImage and keep a strong reference
+                    self._video_photo = ImageTk.PhotoImage(img)
+                    self.video_label.configure(image=self._video_photo, text="")
+                except TclError:
+                    pass
+            else:
+                try:
+                    self._video_photo = None
+                    self.video_label.configure(image="", text="Camera Feed (Stopped)")
+                except TclError:
+                    pass
+
+            # ----- Score / feedback -----
             try:
-                img = self.last_frame.resize((FRAME_WIDTH, FRAME_HEIGHT))
-                ctk_image = ctk.CTkImage(light_image=img, dark_image=img, size=(FRAME_WIDTH, FRAME_HEIGHT))
-                self.video_label.configure(image=ctk_image, text="")
-                self.video_label.image = ctk_image  # Keep a reference
-            except Exception as e:
-                print(f"!!! ERROR in update_ui_elements: {e}")
-                import traceback
-                traceback.print_exc()
-                self.video_label.configure(image=None, text="Error displaying frame")
-                self.video_label.image = None
-        else:
-            self.video_label.configure(image=None, text="Camera Feed (Stopped)")
-            self.video_label.image = None
-            
-        # Update score and feedback
-        self.score_label.configure(text=f"Score: {self.last_score:.1f}")
-        self.feedback_text_label.configure(text=f"Feedback: {self.last_feedback}")
-        
-        # Set score color
-        if self.last_score >= 85:
-            self.score_label.configure(text_color="lightgreen")
-        elif self.last_score >= 60:
-            self.score_label.configure(text_color="yellow")
-        else:
-            self.score_label.configure(text_color="lightcoral")
-            
-        # Update Status Label with Pose Number
-        if self.is_running and self.pro_data_loaded:
-            frame_count = self.motion_player.get_frame_count()
-            display_index = self.motion_player.get_display_frame_number()
-            self.status_label.configure(text=f"Status: Practicing Pose {display_index}/{frame_count}")
-        elif not self.is_running and self.pro_data_loaded:
-            self.status_label.configure(
-                text=f"Status: Ready ({self.motion_player.get_frame_count()} frames)."
-            )
-            
-        # Reschedule the update ONLY if the session is running
+                self.score_label.configure(text=f"Score: {self.last_score:.1f}")
+                self.feedback_text_label.configure(text=f"Feedback: {self.last_feedback}")
+                if self.last_score >= 85:
+                    self.score_label.configure(text_color="lightgreen")
+                elif self.last_score >= 60:
+                    self.score_label.configure(text_color="yellow")
+                else:
+                    self.score_label.configure(text_color="lightcoral")
+            except TclError:
+                pass
+
+            # ----- Status line -----
+            try:
+                if self.is_running and self.pro_data_loaded:
+                    frame_count = self.motion_player.get_frame_count()
+                    display_index = self.motion_player.get_display_frame_number()
+                    self.status_label.configure(text=f"Status: Practicing Pose {display_index}/{frame_count}")
+                elif not self.is_running and self.pro_data_loaded:
+                    self.status_label.configure(text=f"Status: Ready ({self.motion_player.get_frame_count()} frames).")
+            except TclError:
+                pass
+
+        except Exception as e:
+            import traceback
+            print(f"!!! ERROR in update_ui_elements: {e}")
+            traceback.print_exc()
+
+        # Reschedule only while running (prevents late callbacks on stop)
         if self.is_running:
-            self.after(33, self.update_ui_elements)  # Aim for ~30 FPS UI updates
-            
+            self.after(33, self.update_ui_elements)
+
+    
     def on_closing(self):
         """Handle window close event"""
         print("Closing application...")

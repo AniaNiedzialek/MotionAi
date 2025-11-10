@@ -1,197 +1,193 @@
 import sqlite3
 import json
 import os
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Optional, Any
+
 
 class MotionDatabase:
-    def __init__(self, db_path="./real_time/motion_data.db"):
-        """Initialize the SQLite database for motion storage"""
-        
+    def __init__(self, db_path: str = "./real_time/motion_data.db"):
+        """Initialize the SQLite database for motion storage."""
         self.db_path = db_path
         self._create_tables()
-        
+
+    # --------------------------------------------------------------------------
+    # Schema setup
+    # --------------------------------------------------------------------------
     def _create_tables(self):
-        """Create necessary tables if they don't exist"""
-        
+        """Create necessary tables if they don't exist."""
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        # Create categories table
-        cursor.execute('''
+        cur = conn.cursor()
+
+        # Categories table
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS categories (
                 id INTEGER PRIMARY KEY,
                 name TEXT UNIQUE NOT NULL
-            )            
-        ''')
-        
-        # Create motions table
-        cursor.execute('''
+            )
+            """
+        )
+
+        # Motions table
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS motions (
                 id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
                 category_id INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (category_id) REFERENCES categories (id)
-            )            
-        ''')
-        
-        # Create frames table
-        cursor.execute('''
+            )
+            """
+        )
+
+        # Frames table
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS frames (
                 id INTEGER PRIMARY KEY,
                 motion_id INTEGER,
                 frame_index INTEGER,
                 frame_data TEXT,
                 FOREIGN KEY (motion_id) REFERENCES motions (id)
-            )            
-        ''')
-        
+            )
+            """
+        )
+
         conn.commit()
         conn.close()
-    
-    def add_motion(self, name: str, category: str, keypoints_data: List[Dict]) -> int:
-        """Add a new motion sequence to the database"""
-        
+
+    # --------------------------------------------------------------------------
+    # Insert operations
+    # --------------------------------------------------------------------------
+    def add_motion(self, name: str, category: str, keypoints_data: List[Dict[str, Any]]) -> Optional[int]:
+        """Add a new motion sequence (and its frames) to the database."""
         conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
+        cur = conn.cursor()
         try:
-            cursor.execute(
-                "INSERT OR IGNORE INTO categories (name) VALUES (?)",
-                (category,)
-            )
-            
-            # Get category ID
-            cursor.execute("SELECT id FROM categories WHERE name = ?", (category,))
-            category_id = cursor.fetchone()[0]
-            
-            # Insert motion record
-            cursor.execute(
+            # Ensure category exists
+            cur.execute("INSERT OR IGNORE INTO categories (name) VALUES (?)", (category,))
+            cur.execute("SELECT id FROM categories WHERE name = ?", (category,))
+            category_id = cur.fetchone()[0]
+
+            # Insert motion
+            cur.execute(
                 "INSERT INTO motions (name, category_id) VALUES (?, ?)",
-                (name, category_id)
+                (name, category_id),
             )
-            motion_id = cursor.lastrowid
-            
+            motion_id = cur.lastrowid
+
             # Insert each frame
             for i, frame_data in enumerate(keypoints_data):
-                cursor.execute(
+                cur.execute(
                     "INSERT INTO frames (motion_id, frame_index, frame_data) VALUES (?, ?, ?)",
-                    (motion_id, i, json.dumps(frame_data))
+                    (motion_id, i, json.dumps(frame_data)),
                 )
-            
+
             conn.commit()
             print(f"Motion '{name}' added with ID {motion_id}.")
             return motion_id
-        
+
         except Exception as e:
-            print(f"Error adding motion: {e}")
             conn.rollback()
+            print(f"Error adding motion: {e}")
             return None
         finally:
             conn.close()
-            
-    def get_motion(self, motion_id: int) -> Optional[List[Dict]]:
-        """Get motion frame data by motion ID"""
-        
+
+    # --------------------------------------------------------------------------
+    # Retrieval
+    # --------------------------------------------------------------------------
+    def get_motion(self, motion_id: int) -> Optional[List[Dict[str, Any]]]:
+        """Retrieve all frames for a specific motion ID."""
         conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
+        cur = conn.cursor()
         try:
-            cursor.execute("""
+            cur.execute(
+                """
                 SELECT frame_data FROM frames
                 WHERE motion_id = ?
-                ORDER BY frame_index               
-            """)
-            
-            frames = []
-            for (frame_data,) in cursor.fetchall():
-                frames.append(json.loads(frame_data))
-            
+                ORDER BY frame_index
+                """,
+                (motion_id,),  # ✅ Correct parameter tuple
+            )
+            rows = cur.fetchall()
+            frames = [json.loads(row[0]) for row in rows if row and row[0]]
             return frames if frames else None
-        
+        except Exception as e:
+            print(f"Error loading keypoints: {e}")
+            return None
         finally:
             conn.close()
-            
-    def get_motion_by_name(self, name: str) -> Optional[List[Dict]]:
-        """Get motion frame data by name"""
-        
+
+    def get_motion_by_name(self, name: str) -> Optional[List[Dict[str, Any]]]:
+        """Retrieve motion frames by motion name."""
         conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
+        cur = conn.cursor()
         try:
-            #Find motion ID by name
-            cursor.execute("SELECT id FROM motions WHERE name = ?", (name,))
-            result = cursor.fetchone()
-            
-            if not result:
+            cur.execute("SELECT id FROM motions WHERE name = ?", (name,))
+            row = cur.fetchone()
+            if not row:
                 print(f"No motion found with name '{name}'.")
                 return None
-            
-            motion_id = result[0]
-            return self.get_motion(motion_id)
-        
+            return self.get_motion(row[0])
         finally:
             conn.close()
-            
-    def get_motions_list(self) -> List[Dict]:
-        """Get list of all available motions"""
-        
+
+    def get_motions_list(self) -> List[Dict[str, Any]]:
+        """Return list of all motions with frame counts."""
         conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
+        cur = conn.cursor()
         try:
-            cursor.execute("""
-                SELECT m.id, m.name, c.name, COUNT(f.id)
+            cur.execute(
+                """
+                SELECT 
+                    m.id,
+                    m.name,
+                    COALESCE(c.name, 'Uncategorized') AS category,
+                    COUNT(f.id) AS frame_count
                 FROM motions m
-                JOIN categories c ON m.category_id = c.id
+                LEFT JOIN categories c ON m.category_id = c.id
                 LEFT JOIN frames f ON f.motion_id = m.id
-                GROUP BY m.id    
-            """)
-            
+                GROUP BY m.id
+                ORDER BY m.created_at DESC
+                """
+            )
             motions = []
-            for motion_id, name, category, frame_count in cursor.fetchall():
-                motions.append({
-                    "id": motion_id,
-                    "name": name,
-                    "category": category,
-                    "frame_count": frame_count
-                })
-                
+            for motion_id, name, category, frame_count in cur.fetchall():
+                motions.append(
+                    {
+                        "id": motion_id,
+                        "name": name,
+                        "category": category,
+                        "frame_count": frame_count,
+                    }
+                )
             return motions
         finally:
             conn.close()
-            
-    
+
     def get_categories(self) -> List[str]:
-        """Get list of all categories"""
-        
+        """Return all category names."""
         conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
+        cur = conn.cursor()
         try:
-            cursor.execute("SELECT name FROM categories ORDER BY name")
-            return [row[0] for row in cursor.fetchall()]
-        
+            cur.execute("SELECT name FROM categories ORDER BY name")
+            return [row[0] for row in cur.fetchall()]
         finally:
             conn.close()
-            
+
+    # --------------------------------------------------------------------------
+    # Deletion
+    # --------------------------------------------------------------------------
     def delete_motion(self, motion_id: int) -> bool:
-        """Delete a motion and all its frames"""
-        
+        """Delete a motion and all its frames."""
         conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
+        cur = conn.cursor()
         try:
-            # Delete frames first to maintain foreign key integrity
-            cursor.execute("DELETE FROM frames WHERE motion_id = ?", (motion_id,))
-            
-            # Delete the motion record
-            cursor.execute("DELETE FROM motions WHERE id = ?", (motion_id,))
-            
-            if cursor.rowcount == 0:
-                conn.rollback()
-                return False          
-            
+            cur.execute("DELETE FROM frames WHERE motion_id = ?", (motion_id,))
+            cur.execute("DELETE FROM motions WHERE id = ?", (motion_id,))
             conn.commit()
             print(f"Motion with ID {motion_id} deleted.")
             return True
