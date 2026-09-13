@@ -18,8 +18,9 @@ target/
 build/
 out/
 
-# VS Code
+# IDEs
 .vscode/
+.idea/
 
 # Databases & logs
 *.db
@@ -29,3 +30,4 @@ out/
 # Caches
 *.cache/
 .cache/
+.pytest_cache/
