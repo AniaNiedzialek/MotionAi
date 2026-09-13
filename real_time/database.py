@@ -3,11 +3,15 @@ import json
 import os
 from typing import Dict, List, Optional, Any
 
+# Resolve the database next to this module so the app works from any directory.
+MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_DB_PATH = os.path.join(MODULE_DIR, "motion_data.db")
+
 
 class MotionDatabase:
-    def __init__(self, db_path: str = "./real_time/motion_data.db"):
+    def __init__(self, db_path: Optional[str] = None):
         """Initialize the SQLite database for motion storage."""
-        self.db_path = db_path
+        self.db_path = db_path or DEFAULT_DB_PATH
         self._create_tables()
 
     # --------------------------------------------------------------------------
@@ -15,7 +19,9 @@ class MotionDatabase:
     # --------------------------------------------------------------------------
     def _create_tables(self):
         """Create necessary tables if they don't exist."""
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        db_dir = os.path.dirname(self.db_path)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
         conn = sqlite3.connect(self.db_path)
         cur = conn.cursor()
 
@@ -110,7 +116,7 @@ class MotionDatabase:
                 WHERE motion_id = ?
                 ORDER BY frame_index
                 """,
-                (motion_id,),  # ✅ Correct parameter tuple
+                (motion_id,),
             )
             rows = cur.fetchall()
             frames = [json.loads(row[0]) for row in rows if row and row[0]]
