@@ -3,12 +3,12 @@ from database import MotionDatabase
 class MotionPlayer:
     """Manages professional motion playback and frame selection"""
     
-    def __init__(self, db=None):
+    def __init__(self, db=None, advance_score_threshold=90.0):
         self.db = db or MotionDatabase()
         self.professional_keypoints = []
         self.current_motion_id = None
         self.current_frame_index = 0
-        self.advance_score_threshold = 98.0  # Score needed to move to next pose
+        self.advance_score_threshold = advance_score_threshold
         
     def load_motion(self, motion_id=None):
         """Load keypoints from database by motion ID or get first available"""
