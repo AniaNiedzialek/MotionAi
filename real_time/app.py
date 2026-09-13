@@ -14,7 +14,7 @@ CAMERA_INDEX = 0
 TARGET_FPS = 30
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
-ADVANCE_SCORE_THRESHOLD = 98.0
+ADVANCE_SCORE_THRESHOLD = 90.0  # 98 is unreachable, the reference scores 97.2 against its own next frame
 
 class MotionApp(ctk.CTk):
     def __init__(self):
@@ -31,7 +31,7 @@ class MotionApp(ctk.CTk):
         )
         self.pose_processor = PoseProcessor()
         self.motion_comparer = MotionComparer()
-        self.motion_player = MotionPlayer(self.db)
+        self.motion_player = MotionPlayer(self.db, ADVANCE_SCORE_THRESHOLD)
         
         # App state
         self.is_running = False
