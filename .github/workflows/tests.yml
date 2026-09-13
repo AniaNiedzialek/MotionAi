@@ -14,6 +14,8 @@ jobs:
           cache: pip
 
       # installs from requirements.txt so a broken pin fails here, not on a user machine
-      - run: pip install -r requirements.txt pytest
+      - run: pip install -r requirements.txt pytest pyflakes
+
+      - run: pyflakes real_time/ tests/
 
       - run: pytest -q
