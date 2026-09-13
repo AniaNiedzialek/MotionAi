@@ -1,8 +1,6 @@
 import customtkinter as ctk
 import cv2
 import mediapipe as mp
-import numpy as np
-import json
 import threading
 import time
 import os

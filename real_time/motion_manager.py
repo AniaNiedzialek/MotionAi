@@ -1,6 +1,5 @@
 import customtkinter as ctk
 from database import MotionDatabase
-import threading
 
 class MotionSelectionDialog(ctk.CTkToplevel):
     def __init__(self, parent):
