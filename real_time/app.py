@@ -1,7 +1,6 @@
 import customtkinter as ctk
 import cv2
 import threading
-import time
 from PIL import Image, ImageTk
 
 from camera_manager import CameraManager
@@ -168,6 +167,7 @@ class MotionApp(ctk.CTk):
             
         else:  # If not running, start continuous playback
             self.is_running = True
+            self.last_feedback = "Waiting..."  # clear any error from a previous session
             self.start_stop_button.configure(text="Stop Practice")
             self.load_pro_button.configure(state="disabled")
             self.status_label.configure(text="Status: Session Running")
@@ -188,8 +188,14 @@ class MotionApp(ctk.CTk):
             print("Processing thread has finished.")
             self.processing_thread = None
             self.status_label.configure(text="Status: Idle.")
-            
-    
+
+    def on_session_ended(self):
+        """Return the controls to idle. Runs on every exit path."""
+        self.is_running = False
+        self.start_stop_button.configure(text="Start Practice")
+        self.load_pro_button.configure(state="normal")
+        self.update_ui_elements()
+
     def process_frames_loop(self):
         """Main processing loop running in a separate thread."""
         PROCESS_EVERY = 3            # run mediapipe every N frames for perf
@@ -202,7 +208,6 @@ class MotionApp(ctk.CTk):
                 print(f"DEBUG: camera start failed -> {reason}")
                 self.last_feedback = f"Error: {reason}"
                 self.is_running = False
-                self.after(50, self.update_ui_elements)
                 return
 
             print(f"DEBUG: camera opened on index {self.camera_manager.camera_index}")
@@ -224,6 +229,7 @@ class MotionApp(ctk.CTk):
                         print(f"DEBUG: read_frame failed x{consecutive_fail}")
                     if consecutive_fail >= 60:  # ~2 sec at 30 fps
                         print("DEBUG: too many read failures, stopping loop")
+                        self.last_feedback = "Error: Camera stopped returning frames."
                         break
                     continue
                 consecutive_fail = 0
@@ -334,7 +340,10 @@ class MotionApp(ctk.CTk):
             self.last_score = 0.0
             if not str(self.last_feedback).startswith("Error:"):
                 self.last_feedback = "Session stopped."
-            self.after(10, self.update_ui_elements)
+            try:
+                self.after(10, self.on_session_ended)
+            except Exception as e:
+                print(f"DEBUG: could not schedule session cleanup: {e}")
     
     def update_ui_elements(self):
         """Update UI with current application state (thread-safe & image-safe)."""
@@ -370,12 +379,16 @@ class MotionApp(ctk.CTk):
                 pass
 
             # ----- Status line -----
+            # The error case comes first so a failed session keeps reporting why,
+            # even if a callback queued by the old session lands afterwards.
             try:
-                if self.is_running and self.pro_data_loaded:
+                if str(self.last_feedback).startswith("Error:"):
+                    self.status_label.configure(text=f"Status: {self.last_feedback}")
+                elif self.is_running and self.pro_data_loaded:
                     frame_count = self.motion_player.get_frame_count()
                     display_index = self.motion_player.get_display_frame_number()
                     self.status_label.configure(text=f"Status: Practicing Pose {display_index}/{frame_count}")
-                elif not self.is_running and self.pro_data_loaded:
+                elif self.pro_data_loaded:
                     self.status_label.configure(text=f"Status: Ready ({self.motion_player.get_frame_count()} frames).")
             except TclError:
                 pass
