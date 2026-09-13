@@ -5,10 +5,14 @@ from database import MotionDatabase
 from migration import DEFAULT_JSON_PATH, DEFAULT_MOTION_NAME, migrate_json_to_db
 
 
-def test_default_db_lives_next_to_the_module():
+def test_default_db_lives_next_to_the_module(tmp_path, monkeypatch):
     """The database must not depend on the directory the app was launched from."""
+    monkeypatch.chdir(tmp_path)
     assert os.path.isabs(database.DEFAULT_DB_PATH)
     assert os.path.dirname(database.DEFAULT_DB_PATH) == database.MODULE_DIR
+    # the constructor must use that constant, not a path of its own
+    assert MotionDatabase().db_path == database.DEFAULT_DB_PATH
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_bundled_keypoints_are_present():
