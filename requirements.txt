@@ -1,0 +1,11 @@
+# Runtime dependencies for the real-time app (real_time/app.py).
+#
+# mediapipe is pinned: 0.10.21 is the last release that ships the legacy
+# mp.solutions API that real_time/pose_processor.py is built on. Later releases,
+# including 1.0.x, removed it and the app cannot start against them.
+# That pin requires numpy < 2, which in turn rules out opencv-python 5.x.
+mediapipe==0.10.21
+numpy<2
+opencv-python<5
+customtkinter
+Pillow
