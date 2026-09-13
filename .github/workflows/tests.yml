@@ -1,0 +1,19 @@
+name: tests
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'   # mediapipe 0.10.21 has no 3.13 wheels
+          cache: pip
+
+      # installs from requirements.txt so a broken pin fails here, not on a user machine
+      - run: pip install -r requirements.txt pytest
+
+      - run: pytest -q
