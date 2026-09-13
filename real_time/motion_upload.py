@@ -467,7 +467,8 @@ class MotionUploadDialog(ctk.CTkToplevel):
         except Exception as e:
             import traceback
             traceback.print_exc()
-            self.safe_after(lambda: self.file_status_label.configure(text=f"Error: {str(e)}", text_color="red"))
+            # bind the message now, e is unbound by the time the callback runs
+            self.safe_after(lambda msg=str(e): self.file_status_label.configure(text=f"Error: {msg}", text_color="red"))
 
     # ---------- Interpolation ----------
 
