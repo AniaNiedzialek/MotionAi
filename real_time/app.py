@@ -23,6 +23,7 @@ class MotionApp(ctk.CTk):
         
         # Initialize components
         self.db = MotionDatabase()
+        self.seed_default_motion()
         self.camera_manager = CameraManager(
             camera_index=CAMERA_INDEX, 
             frame_width=FRAME_WIDTH,
@@ -50,7 +51,17 @@ class MotionApp(ctk.CTk):
         
         # Handle window closing
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
-        
+
+    def seed_default_motion(self):
+        """Seed the bundled motion so there is something to practice."""
+        try:
+            if self.db.get_motions_list():
+                return
+            from migration import migrate_json_to_db
+            migrate_json_to_db(self.db)
+        except Exception as e:
+            print(f"Could not seed the default motion: {e}")
+
     def setup_ui(self):
         """Initialize and configure all UI components"""
         self.title("Real-time Motion Instructor")
